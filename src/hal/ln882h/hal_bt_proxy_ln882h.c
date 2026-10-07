@@ -54,11 +54,38 @@ static void hal_bt_gap_callback(void* param)
 	ble_evt_scan_report_t* info = (ble_evt_scan_report_t*)param;
 
 	g_bt_proxy.scan_total_packets++;
+
+    // --- INIZIO MODIFICA RELÈ PROSSIMITÀ ---
+    extern void CHANNEL_Set(int channel, int iVal, int iFlags);
+    
+    // Il tuo MAC Bluetooth: 80:2A:F6:9E:47:49
+    uint8_t target_mac[6] = {0x80, 0x2A, 0xF6, 0x9E, 0x47, 0x49}; 
+    
+    // Controlla se il MAC scansionato corrisponde al tuo telefono
+    if (memcmp(info->trans_addr, target_mac, 6) == 0) {
+        static int relay_is_on = 0;
+        int actual_rssi = info->rssi - 128; // Calcolo corretto dell'RSSI per LN882H
+        
+        if (actual_rssi > -65) {
+            if (relay_is_on == 0) {
+                CHANNEL_Set(0, 1, 0); // Accende il relè (Channel 0)
+                relay_is_on = 1;
+            }
+        } else if (actual_rssi < -75) {
+            if (relay_is_on == 1) {
+                CHANNEL_Set(0, 0, 0); // Spegne il relè
+                relay_is_on = 0;
+            }
+        }
+    }
+    // --- FINE MODIFICA RELÈ PROSSIMITÀ ---
+
 	if(!ESPHome_API_PassScanResult(info->trans_addr, info->rssi - 128, info->trans_addr_type, info->data, info->length))
 	{
 		g_bt_proxy.scan_dropped_packets++;
 	}
 }
+
 
 static void HAL_BTScan_EnsureStackReady()
 {
