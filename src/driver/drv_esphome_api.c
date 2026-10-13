@@ -291,6 +291,38 @@ void ESPHome_API_Process_Packet(int client_sock, uint32_t type, uint8_t* payload
 // Forward a BLE scan result to the connected ESPHome client
 bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, uint8_t addr_type, const uint8_t* data, int data_len)
 {
+	// -- INIZIO HACK BLUETOOTH AUTONOMO --
+	if (mac != NULL) {
+		extern void CHANNEL_Set(int ch, int val, int iFlags);
+		extern uint32_t rtos_get_time(void);
+
+		// Il MAC del tuo telefono
+		uint8_t my_mac[6] = {0x80, 0x2A, 0xF6, 0x9E, 0x47, 0x49};
+		uint8_t my_mac_rev[6] = {0x49, 0x47, 0x9E, 0xF6, 0x2A, 0x80};
+
+		static uint32_t last_seen = 0;
+		static int is_present = 0;
+		uint32_t now = rtos_get_time();
+
+		if (memcmp(mac, my_mac, 6) == 0 || memcmp(mac, my_mac_rev, 6) == 0) {
+			if (rssi > -85) { // SOGLIA RSSI
+				last_seen = now;
+				if (is_present == 0) {
+					is_present = 1;
+					CHANNEL_Set(0, 1, 0);  // Accende il Relè
+					CHANNEL_Set(10, 1, 0); // Accende il LED
+				}
+			}
+		}
+
+		if (is_present == 1 && (now - last_seen) > 15000) { // Timeout 15 sec
+			is_present = 0;
+			CHANNEL_Set(0, 0, 0);  // Spegne il Relè
+			CHANNEL_Set(10, 0, 0); // Spegne il LED
+		}
+	}
+	// -- FINE HACK BLUETOOTH --
+
 	if(client_sock == INVALID_SOCK || g_bt_proxy_forwarding_active == false) return false;
 	if(!mac || !data || data_len <= 0) return false;
 
