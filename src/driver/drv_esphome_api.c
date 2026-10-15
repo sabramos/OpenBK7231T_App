@@ -297,16 +297,20 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		extern uint32_t rtos_get_time(void);
 
 		// La tua password segreta di 16 byte (UUID iBeacon)
-		// Nel telefono imposteremo: A1B2C3D4-E5F6-7890-1234-567890ABCDEF
 		uint8_t my_uuid[16] = {0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x78, 0x90, 0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF};
-
+		
 		static uint32_t last_seen = 0;
 		static int is_present = 0;
-		uint32_t now = rtos_get_time();
-		int found = 0;
+		
+		uint32_t now;
+		int found;
+		int i;
+
+		now = rtos_get_time();
+		found = 0;
 
 		// Cerca la sequenza UUID ovunque all'interno del pacchetto dati
-		for (int i = 0; i <= data_len - 16; i++) {
+		for (i = 0; i <= data_len - 16; i++) {
 			if (memcmp(&data[i], my_uuid, 16) == 0) {
 				found = 1;
 				break;
@@ -349,7 +353,8 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 
 	// Convert MAC to uint64
 	uint64_t mac_u64 = 0;
-	for(int i = 0; i < 6; i++) mac_u64 |= ((uint64_t)mac[i]) << (i * 8);
+	int j; // Dichiarazione C89 per evitare l'errore nel ciclo for originale
+	for(j = 0; j < 6; j++) mac_u64 |= ((uint64_t)mac[j]) << (j * 8);
 
 	// Encode the single Advertisement message into a sub-buffer
 	uint8_t adv_msg[256];
