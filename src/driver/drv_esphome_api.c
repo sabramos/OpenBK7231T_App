@@ -291,23 +291,18 @@ void ESPHome_API_Process_Packet(int client_sock, uint32_t type, uint8_t* payload
 // Forward a BLE scan result to the connected ESPHome client
 bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, uint8_t addr_type, const uint8_t* data, int data_len)
 {
-	// -- INIZIO HACK BLUETOOTH CON UUID --
+	// -- INIZIO HACK BLUETOOTH CON UUID E PACKET COUNTER --
 	if (data != NULL && data_len >= 16) {
 		extern void CHANNEL_Set(int ch, int val, int iFlags);
-		extern uint32_t rtos_get_time(void);
 
 		// La tua password segreta di 16 byte (UUID iBeacon)
 		uint8_t my_uuid[16] = {0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x78, 0x90, 0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF};
 		
-		static uint32_t last_seen = 0;
 		static int is_present = 0;
+		static int timeout_counter = 0;
 		
-		uint32_t now;
-		int found;
+		int found = 0;
 		int i;
-
-		now = rtos_get_time();
-		found = 0;
 
 		// Cerca la sequenza UUID ovunque all'interno del pacchetto dati
 		for (i = 0; i <= data_len - 16; i++) {
@@ -318,20 +313,25 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		}
 
 		if (found == 1) {
-			if (rssi > -85) { // SOGLIA RSSI: puoi abbassare questo numero se scatta troppo lontano (es. -70)
-				last_seen = now;
+			if (rssi > -85) { // SOGLIA RSSI (puoi modificarla in seguito se necessario)
+				timeout_counter = 1500; // Resetta il timer (1500 pacchetti = ~30-60 sec)
 				if (is_present == 0) {
 					is_present = 1;
 					CHANNEL_Set(0, 1, 0);  // Accende il Relè
 					CHANNEL_Set(10, 1, 0); // Accende il LED
 				}
 			}
-		}
-
-		if (is_present == 1 && (now - last_seen) > 15000) { // Timeout 15 sec
-			is_present = 0;
-			CHANNEL_Set(0, 0, 0);  // Spegne il Relè
-			CHANNEL_Set(10, 0, 0); // Spegne il LED
+		} else {
+			// Usa i pacchetti degli altri dispositivi come "battito" per far scorrere il tempo
+			if (is_present == 1) {
+				if (timeout_counter > 0) {
+					timeout_counter--;
+				} else {
+					is_present = 0;
+					CHANNEL_Set(0, 0, 0);  // Spegne il Relè
+					CHANNEL_Set(10, 0, 0); // Spegne il LED
+				}
+			}
 		}
 	}
 	// -- FINE HACK BLUETOOTH CON UUID --
@@ -353,7 +353,7 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 
 	// Convert MAC to uint64
 	uint64_t mac_u64 = 0;
-	int j; // Dichiarazione C89 per evitare l'errore nel ciclo for originale
+	int j; 
 	for(j = 0; j < 6; j++) mac_u64 |= ((uint64_t)mac[j]) << (j * 8);
 
 	// Encode the single Advertisement message into a sub-buffer
