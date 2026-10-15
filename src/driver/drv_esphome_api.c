@@ -291,21 +291,30 @@ void ESPHome_API_Process_Packet(int client_sock, uint32_t type, uint8_t* payload
 // Forward a BLE scan result to the connected ESPHome client
 bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, uint8_t addr_type, const uint8_t* data, int data_len)
 {
-	// -- INIZIO HACK BLUETOOTH AUTONOMO --
-	if (mac != NULL) {
+	// -- INIZIO HACK BLUETOOTH CON UUID --
+	if (data != NULL && data_len >= 16) {
 		extern void CHANNEL_Set(int ch, int val, int iFlags);
 		extern uint32_t rtos_get_time(void);
 
-		// Il MAC del tuo telefono
-		uint8_t my_mac[6] = {0x80, 0x2A, 0xF6, 0x9E, 0x47, 0x49};
-		uint8_t my_mac_rev[6] = {0x49, 0x47, 0x9E, 0xF6, 0x2A, 0x80};
+		// La tua password segreta di 16 byte (UUID iBeacon)
+		// Nel telefono imposteremo: A1B2C3D4-E5F6-7890-1234-567890ABCDEF
+		uint8_t my_uuid[16] = {0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x78, 0x90, 0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF};
 
 		static uint32_t last_seen = 0;
 		static int is_present = 0;
 		uint32_t now = rtos_get_time();
+		int found = 0;
 
-		if (memcmp(mac, my_mac, 6) == 0 || memcmp(mac, my_mac_rev, 6) == 0) {
-			if (rssi > -85) { // SOGLIA RSSI
+		// Cerca la sequenza UUID ovunque all'interno del pacchetto dati
+		for (int i = 0; i <= data_len - 16; i++) {
+			if (memcmp(&data[i], my_uuid, 16) == 0) {
+				found = 1;
+				break;
+			}
+		}
+
+		if (found == 1) {
+			if (rssi > -85) { // SOGLIA RSSI: puoi abbassare questo numero se scatta troppo lontano (es. -70)
 				last_seen = now;
 				if (is_present == 0) {
 					is_present = 1;
@@ -321,7 +330,7 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 			CHANNEL_Set(10, 0, 0); // Spegne il LED
 		}
 	}
-	// -- FINE HACK BLUETOOTH --
+	// -- FINE HACK BLUETOOTH CON UUID --
 
 	if(client_sock == INVALID_SOCK || g_bt_proxy_forwarding_active == false) return false;
 	if(!mac || !data || data_len <= 0) return false;
