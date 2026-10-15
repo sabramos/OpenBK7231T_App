@@ -291,30 +291,56 @@ void ESPHome_API_Process_Packet(int client_sock, uint32_t type, uint8_t* payload
 // Forward a BLE scan result to the connected ESPHome client
 bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, uint8_t addr_type, const uint8_t* data, int data_len)
 {
-	// -- INIZIO HACK BLUETOOTH CON UUID E PACKET COUNTER --
+	// -- INIZIO HACK BLUETOOTH CON SOGLIA, UUID E MAC ADDRESS --
 	if (data != NULL && data_len >= 16) {
 		extern void CHANNEL_Set(int ch, int val, int iFlags);
+		extern int CHANNEL_Get(int ch);
 
-		// La tua password segreta di 16 byte (UUID iBeacon)
+		// 1. Password UUID (Per il telefono)
 		uint8_t my_uuid[16] = {0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x78, 0x90, 0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF};
 		
+		// 2. I MAC address dei tuoi dispositivi (Orologio, Chiavetta Android Auto)
+		uint8_t watch_mac[6] = {0x54, 0x2F, 0x04, 0xAE, 0x61, 0xB4}; 
+		uint8_t extra_mac[6] = {0x94, 0xBA, 0x06, 0x2A, 0xD8, 0x03}; 
+
 		static int is_present = 0;
 		static int timeout_counter = 0;
 		
 		int found = 0;
 		int i;
+		int soglia_rssi = -85;
+		int val_ch11 = 0;
 
-		// Cerca la sequenza UUID ovunque all'interno del pacchetto dati
-		for (i = 0; i <= data_len - 16; i++) {
-			if (memcmp(&data[i], my_uuid, 16) == 0) {
+		// CONTROLLO 1: Verifica prima se il pacchetto arriva dall'orologio o dalla chiavetta Android Auto
+		if (mac != NULL) {
+			if (memcmp(mac, watch_mac, 6) == 0 || memcmp(mac, extra_mac, 6) == 0) {
 				found = 1;
-				break;
 			}
 		}
 
+		// CONTROLLO 2: Se non è nessuno dei due dispositivi fissi, cerca l'UUID del telefono dentro il pacchetto
+		if (found == 0) {
+			for (i = 0; i <= data_len - 16; i++) {
+				if (memcmp(&data[i], my_uuid, 16) == 0) {
+					found = 1;
+					break;
+				}
+			}
+		}
+
+		// SE HA TROVATO L'OROLOGIO, LA CHIAVETTA AUTO O IL TELEFONO:
 		if (found == 1) {
-			if (rssi > -85) { // SOGLIA RSSI (puoi modificarla in seguito se necessario)
-				timeout_counter = 1500; // Resetta il timer (1500 pacchetti = ~30-60 sec)
+			val_ch11 = CHANNEL_Get(11);
+			if (val_ch11 != 0) {
+				if (val_ch11 > 0) {
+					soglia_rssi = -val_ch11;
+				} else {
+					soglia_rssi = val_ch11; 
+				}
+			}
+
+			if (rssi > soglia_rssi) { // Usa la soglia impostata sul Canale 11
+				timeout_counter = 1500; // Resetta il timer
 				if (is_present == 0) {
 					is_present = 1;
 					CHANNEL_Set(0, 1, 0);  // Accende il Relè
@@ -322,7 +348,7 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 				}
 			}
 		} else {
-			// Usa i pacchetti degli altri dispositivi come "battito" per far scorrere il tempo
+			// Scandisce i pacchetti estranei per scorrere il tempo (Timeout)
 			if (is_present == 1) {
 				if (timeout_counter > 0) {
 					timeout_counter--;
@@ -334,7 +360,7 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 			}
 		}
 	}
-	// -- FINE HACK BLUETOOTH CON UUID --
+	// -- FINE HACK BLUETOOTH UNIVERSALE --
 
 	if(client_sock == INVALID_SOCK || g_bt_proxy_forwarding_active == false) return false;
 	if(!mac || !data || data_len <= 0) return false;
