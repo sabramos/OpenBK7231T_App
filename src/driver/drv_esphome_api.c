@@ -291,35 +291,48 @@ void ESPHome_API_Process_Packet(int client_sock, uint32_t type, uint8_t* payload
 // Forward a BLE scan result to the connected ESPHome client
 bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, uint8_t addr_type, const uint8_t* data, int data_len)
 {
-	// -- INIZIO HACK BLUETOOTH CON SOGLIA, UUID E MAC ADDRESS --
-	if (data != NULL && data_len >= 16) {
+	// -- INIZIO HACK BLUETOOTH CON SOGLIA E MAC DINAMICI SUI CANALI --
+	if (data != NULL) { 
 		extern void CHANNEL_Set(int ch, int val, int iFlags);
 		extern int CHANNEL_Get(int ch);
 
-		// 1. Password UUID (Per il telefono)
+		// Password segreta per il Telefono Honor (questa resta fissa)
 		uint8_t my_uuid[16] = {0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x78, 0x90, 0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF};
-		
-		// 2. I MAC address dei tuoi dispositivi (Orologio, Chiavetta Android Auto)
-		uint8_t watch_mac[6] = {0x54, 0x2F, 0x04, 0xAE, 0x61, 0xB4}; 
-		uint8_t extra_mac[6] = {0x94, 0xBA, 0x06, 0x2A, 0xD8, 0x03}; 
 
 		static int is_present = 0;
 		static int timeout_counter = 0;
-		
+
 		int found = 0;
 		int i;
 		int soglia_rssi = -85;
-		int val_ch11 = 0;
+		int val_ch11;
+		int mac_target_1;
+		int mac_target_2;
+		int mac_target_3;
+		int mac_target_4;
+		int current_mac;
 
-		// CONTROLLO 1: Verifica prima se il pacchetto arriva dall'orologio o dalla chiavetta Android Auto
+		// Recupera i MAC Address salvati nei Canali 12, 13, 14 e 15 dall'utente
+		mac_target_1 = CHANNEL_Get(12);
+		mac_target_2 = CHANNEL_Get(13);
+		mac_target_3 = CHANNEL_Get(14);
+		mac_target_4 = CHANNEL_Get(15);
+
+		// CONTROLLO 1: Verifica i MAC Address Dinamici
 		if (mac != NULL) {
-			if (memcmp(mac, watch_mac, 6) == 0 || memcmp(mac, extra_mac, 6) == 0) {
+			// Unisce gli ultimi 3 blocchi del MAC per creare un numero intero riconoscibile
+			current_mac = (mac[3] << 16) | (mac[4] << 8) | mac[5];
+			
+			if ((mac_target_1 != 0 && current_mac == mac_target_1) ||
+				(mac_target_2 != 0 && current_mac == mac_target_2) ||
+				(mac_target_3 != 0 && current_mac == mac_target_3) ||
+				(mac_target_4 != 0 && current_mac == mac_target_4)) {
 				found = 1;
 			}
 		}
 
-		// CONTROLLO 2: Se non è nessuno dei due dispositivi fissi, cerca l'UUID del telefono dentro il pacchetto
-		if (found == 0) {
+		// CONTROLLO 2: Se non riconosce il MAC, cerca l'UUID dell'App sul telefono
+		if (found == 0 && data_len >= 16) {
 			for (i = 0; i <= data_len - 16; i++) {
 				if (memcmp(&data[i], my_uuid, 16) == 0) {
 					found = 1;
@@ -328,8 +341,8 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 			}
 		}
 
-		// SE HA TROVATO L'OROLOGIO, LA CHIAVETTA AUTO O IL TELEFONO:
 		if (found == 1) {
+			// Legge la distanza (soglia) impostata sul Canale 11
 			val_ch11 = CHANNEL_Get(11);
 			if (val_ch11 != 0) {
 				if (val_ch11 > 0) {
@@ -339,8 +352,8 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 				}
 			}
 
-			if (rssi > soglia_rssi) { // Usa la soglia impostata sul Canale 11
-				timeout_counter = 1500; // Resetta il timer
+			if (rssi > soglia_rssi) { 
+				timeout_counter = 1500; 
 				if (is_present == 0) {
 					is_present = 1;
 					CHANNEL_Set(0, 1, 0);  // Accende il Relè
@@ -348,7 +361,6 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 				}
 			}
 		} else {
-			// Scandisce i pacchetti estranei per scorrere il tempo (Timeout)
 			if (is_present == 1) {
 				if (timeout_counter > 0) {
 					timeout_counter--;
