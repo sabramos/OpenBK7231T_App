@@ -38,6 +38,14 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	(void)client_sock;
 	(void)addr_type;
 
+	// Se il Canale 11 non e' ancora stato impostato dall'autoexec (primi 10 secondi di boot),
+	// ignora del tutto i pacchetti per lasciare il 100% della CPU al collegamento Wi-Fi!
+	val_ch11 = CHANNEL_Get(11);
+	if (val_ch11 == 0) {
+		return false;
+	}
+	soglia_rssi = (val_ch11 > 0) ? -val_ch11 : val_ch11;
+
 	if (data != NULL) {
 		if (mac != NULL) {
 			current_mac = (mac[3] << 16) | (mac[4] << 8) | mac[5];
@@ -58,9 +66,6 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 			}
 		}
 
-		val_ch11 = CHANNEL_Get(11);
-		if (val_ch11 != 0) soglia_rssi = (val_ch11 > 0) ? -val_ch11 : val_ch11;
-
 		val_ch16 = CHANNEL_Get(16);
 		if (val_ch16 > 0) max_timeout = val_ch16;
 
@@ -72,7 +77,7 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 			}
 			if (led_state != 1) {
 				led_state = 1;
-				CHANNEL_Set(10, 1, 4);
+				CHANNEL_Set(10, 1, 2); // Flag 2 = SILENT (muove il pin fisico senza log/MQTT)
 			}
 		} else {
 			if (is_present == 1) {
@@ -82,14 +87,14 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 					is_present = 0;
 					led_state = 0;
 					CHANNEL_Set(0, 0, 0);
-					CHANNEL_Set(10, 0, 4);
+					CHANNEL_Set(10, 0, 2);
 				}
 			} else {
 				blink_div++;
-				if (blink_div >= 4) {
+				if (blink_div >= 6) {
 					blink_div = 0;
 					led_state = !led_state;
-					CHANNEL_Set(10, led_state, 4);
+					CHANNEL_Set(10, led_state, 2); // Flag 2 = Lampeggio fisico silenzioso
 				}
 			}
 		}
