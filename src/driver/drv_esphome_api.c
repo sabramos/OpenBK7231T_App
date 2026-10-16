@@ -33,17 +33,19 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	static int cooldown_timer = 0;
 	static int led_state = 0;
 	static int blink_div = 0;
-	static int log_counter = 0; // Per evitare lo spam infinito nel log
+	static int debug_log_div = 0;
 
 	int found = 0;
-	int i, val_ch11, val_ch17, val_ch18, current_mac;
+	int i, val_ch11, val_ch17, val_ch18;
+	int mac_dritto = 0, mac_invertito = 0;
 	int soglia_rssi = -85;
-	int pulse_duration = 250;    
-	int cooldown_duration = 1500; 
+	int pulse_duration = 250;    // ~10 secondi reali
+	int cooldown_duration = 1500; // ~60 secondi di cooldown
 
 	(void)client_sock;
 	(void)addr_type;
 
+	// Guardia Wi-Fi iniziale (20s di boot)
 	if (boot_delay_counter < 200) {
 		boot_delay_counter++;
 		return false;
@@ -67,8 +69,8 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		pulse_timer--;
 		if (pulse_timer <= 0) {
 			is_pulsing = 0;
-			CHANNEL_Set(0, 0, 0);   
-			CHANNEL_Set(10, 0, 0);  
+			CHANNEL_Set(0, 0, 0);   // Spegne il relè
+			CHANNEL_Set(10, 0, 0);  // Spegne il LED
 		}
 		return false;
 	}
@@ -77,55 +79,56 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		return false;
 	}
 
-	if (mac != NULL && rssi > -80) {
-		// Stampa nel log web di OpenBeken il MAC letto quando il segnale è forte (limitato ogni ~50 pacchetti per non intasare)
-		log_counter++;
-		if (log_counter >= 50) {
-			log_counter = 0;
-			ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE Scan: MAC %02X:%02X:%02X:%02X:%02X:%02X (RSSI: %d)", 
-				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], rssi);
+	// Lampeggio LED in standby (stile scheda di rete)
+	blink_div++;
+	if (blink_div >= 6) {
+		blink_div = 0;
+		led_state = !led_state;
+		CHANNEL_Set(10, led_state, 2); // Flag 2 = Silenzioso
+	}
+
+	// 1. Verifica riscontro MAC Address
+	if (mac != NULL) {
+		mac_dritto = (mac[3] << 16) | (mac[4] << 8) | mac[5];
+		mac_invertito = (mac[2] << 16) | (mac[1] << 8) | mac[0];
+
+		// Log di debug ogni tot pacchetti per vedere il valore calcolato in decimale
+		debug_log_div++;
+		if (debug_log_div >= 30) {
+			debug_log_div = 0;
+			ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE Check: MAC %02X:%02X:%02X:%02X:%02X:%02X | Dritto: %d | Invertito: %d", 
+				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mac_dritto, mac_invertito);
+		}
+
+		if ((CHANNEL_Get(12) != 0 && (mac_dritto == CHANNEL_Get(12) || mac_invertito == CHANNEL_Get(12))) ||
+			(CHANNEL_Get(13) != 0 && (mac_dritto == CHANNEL_Get(13) || mac_invertito == CHANNEL_Get(13))) ||
+			(CHANNEL_Get(14) != 0 && (mac_dritto == CHANNEL_Get(14) || mac_invertito == CHANNEL_Get(14))) ||
+			(CHANNEL_Get(15) != 0 && (mac_dritto == CHANNEL_Get(15) || mac_invertito == CHANNEL_Get(15)))) {
+			found = 1;
 		}
 	}
 
-	if (data != NULL) {
-		blink_div++;
-		if (blink_div >= 6) {
-			blink_div = 0;
-			led_state = !led_state;
-			CHANNEL_Set(10, led_state, 2); 
-		}
-
-		if (mac != NULL) {
-			// Proviamo a calcolare il MAC sia dritto che invertito per massima compatibilità
-			int mac_dritto = (mac[3] << 16) | (mac[4] << 8) | mac[5];
-			int mac_invertito = (mac[2] << 16) | (mac[1] << 8) | mac[0];
-
-			if ((CHANNEL_Get(12) != 0 && (mac_dritto == CHANNEL_Get(12) || mac_invertito == CHANNEL_Get(12))) ||
-				(CHANNEL_Get(13) != 0 && (mac_dritto == CHANNEL_Get(13) || mac_invertito == CHANNEL_Get(13))) ||
-				(CHANNEL_Get(14) != 0 && (mac_dritto == CHANNEL_Get(14) || mac_invertito == CHANNEL_Get(14))) ||
-				(CHANNEL_Get(15) != 0 && (mac_dritto == CHANNEL_Get(15) || mac_invertito == CHANNEL_Get(15)))) {
+	// 2. Verifica riscontro Advertiser UUID (se il MAC non ha dato match)
+	if (found == 0 && data != NULL && data_len >= 16) {
+		for (i = 0; i <= data_len - 16; i++) {
+			if (memcmp(&data[i], my_uuid, 16) == 0) {
 				found = 1;
+				break;
 			}
-		}
-
-		if (found == 0 && data_len >= 16) {
-			for (i = 0; i <= data_len - 16; i++) {
-				if (memcmp(&data[i], my_uuid, 16) == 0) {
-					found = 1;
-					break;
-				}
-			}
-		}
-
-		if (found == 1 && rssi > soglia_rssi) {
-			is_pulsing = 1;
-			pulse_timer = pulse_duration;
-			cooldown_timer = cooldown_duration + pulse_duration;
-
-			CHANNEL_Set(0, 1, 0);  
-			CHANNEL_Set(10, 1, 0); 
 		}
 	}
+
+	// Se trovato e con segnale superiore alla soglia RSSI: attiva l'impulso relè!
+	if (found == 1 && rssi > soglia_rssi) {
+		is_pulsing = 1;
+		pulse_timer = pulse_duration;
+		cooldown_timer = cooldown_duration + pulse_duration;
+
+		CHANNEL_Set(0, 1, 0);  // Relè ON (impulso)
+		CHANNEL_Set(10, 1, 0); // LED Fisso
+		ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE MATCH SUCCESS! Relè attivato per RSSI %d", rssi);
+	}
+
 	return false;
 }
 
