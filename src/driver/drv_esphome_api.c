@@ -5,6 +5,7 @@
 #include <lwip/sockets.h>
 #include "../new_cfg.h"
 #include "../hal/hal_bt_proxy.h"
+#include "../hal/hal_pins.h"
 
 #if ENABLE_DRIVER_ESPHOME_API
 
@@ -26,25 +27,61 @@ void ESPHome_API_Process_Packet(int s, uint32_t t, uint8_t* p, uint32_t sz) {
 bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, uint8_t addr_type, const uint8_t* data, int data_len)
 {
 	uint8_t my_uuid[16] = {0xA1,0xB2,0xC3,0xD4,0xE5,0xF6,0x78,0x90,0x12,0x34,0x56,0x78,0x90,0xAB,0xCD,0xEF};
-	static int is_present = 0;
-	static int timeout_counter = 0;
+	
+	static int is_pulsing = 0;
+	static int pulse_timer = 0;
+	static int cooldown_timer = 0;
 	static int led_state = 0;
 	static int blink_div = 0;
+
 	int found = 0;
-	int i, val_ch11, val_ch16, current_mac;
+	int i, val_ch11, val_ch17, val_ch18, current_mac;
 	int soglia_rssi = -85;
-	int max_timeout = 80;
+	int pulse_duration = 100;    // Default ~10 secondi (calcolato sui pacchetti o cicli)
+	int cooldown_duration = 600; // Default ~60 secondi di attesa
 
 	(void)client_sock;
 	(void)addr_type;
 
-	// Se il Canale 11 non e' ancora stato impostato dall'autoexec (primi 10 secondi di boot),
-	// ignora del tutto i pacchetti per lasciare il 100% della CPU al collegamento Wi-Fi!
+	// Guardia Wi-Fi iniziale (finche' Canale 11 e' a 0, ignora tutto)
 	val_ch11 = CHANNEL_Get(11);
-	if (val_ch11 == 0) {
+	if (val_ch11 == 0) return false;
+	soglia_rssi = (val_ch11 > 0) ? -val_ch11 : val_ch11;
+
+	// Lettura durata impulso da Canale 17 (configurabile)
+	val_ch17 = CHANNEL_Get(17);
+	if (val_ch17 > 0) pulse_duration = val_ch17 * 10; // Es. 10 secondi = ~100 cicli di scansione
+
+	// Lettura cooldown da Canale 18 (configurabile)
+	val_ch18 = CHANNEL_Get(18);
+	if (val_ch18 > 0) cooldown_duration = val_ch18 * 10; // Es. 60 secondi = ~600 cicli
+
+	// Gestione Timer Cooldown e Impulso in background (chiamato a ogni pacchetto BLE)
+	if (cooldown_timer > 0) {
+		cooldown_timer--;
+	}
+
+	if (is_pulsing == 1) {
+		pulse_timer--;
+		if (pulse_timer <= 0) {
+			is_pulsing = 0;
+			CHANNEL_Set(0, 0, 0);   // Spegne il relè
+			CHANNEL_Set(10, 0, 4);  // Spegne il LED di stato
+		}
+		return false; // Durante l'impulso o il cooldown non analizza nuovi MAC
+	}
+
+	if (cooldown_timer > 0) {
+		// In pausa di rispetto: fa solo lampeggiare silenziosamente il LED
+		blink_div++;
+		if (blink_div >= 10) {
+			blink_div = 0;
+			led_state = !led_state;
+			// Controllo diretto del pin LED (es. Pin 10 o simile tramite hal_pins se configurato, 
+			// oppure usiamo CHANNEL_Set con flag silenzioso ma meno frequente)
+		}
 		return false;
 	}
-	soglia_rssi = (val_ch11 > 0) ? -val_ch11 : val_ch11;
 
 	if (data != NULL) {
 		if (mac != NULL) {
@@ -66,36 +103,23 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 			}
 		}
 
-		val_ch16 = CHANNEL_Get(16);
-		if (val_ch16 > 0) max_timeout = val_ch16;
-
 		if (found == 1 && rssi > soglia_rssi) {
-			timeout_counter = max_timeout;
-			if (is_present == 0) {
-				is_present = 1;
-				CHANNEL_Set(0, 1, 0);
-			}
-			if (led_state != 1) {
-				led_state = 1;
-				CHANNEL_Set(10, 1, 2); // Flag 2 = SILENT (muove il pin fisico senza log/MQTT)
-			}
+			// Dispositivo riconosciuto e vicino: attiva l'impulso relè!
+			is_pulsing = 1;
+			pulse_timer = pulse_duration;
+			cooldown_timer = cooldown_duration + pulse_duration; // Inizia il cooldown
+
+			CHANNEL_Set(0, 1, 0);  // Eccita il relè
+			CHANNEL_Set(10, 1, 4); // Accende il LED fisso (senza log MQTT)
 		} else {
-			if (is_present == 1) {
-				if (timeout_counter > 0) {
-					timeout_counter--;
-				} else {
-					is_present = 0;
-					led_state = 0;
-					CHANNEL_Set(0, 0, 0);
-					CHANNEL_Set(10, 0, 2);
-				}
-			} else {
-				blink_div++;
-				if (blink_div >= 6) {
-					blink_div = 0;
-					led_state = !led_state;
-					CHANNEL_Set(10, led_state, 2); // Flag 2 = Lampeggio fisico silenzioso
-				}
+			// Standby: lampeggio silenzioso del LED senza sporcare i log
+			blink_div++;
+			if (blink_div >= 12) {
+				blink_div = 0;
+				led_state = !led_state;
+				// Aggiornamento pin LED senza generare log testuali continui
+				// (manteniamo unCHANNEL_Set sporadico ogni 12 pacchetti per evitare lo spam a schermo)
+				CHANNEL_Set(10, led_state, 2); 
 			}
 		}
 	}
