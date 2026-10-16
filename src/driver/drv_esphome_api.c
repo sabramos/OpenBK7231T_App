@@ -42,21 +42,18 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	(void)client_sock;
 	(void)addr_type;
 
-	// GUARDIA WI-FI FONDAMENTALE: Finché il Canale 11 è a 0 (durante i primi 12s di boot),
-	// il codice C si ferma e lascia l'antenna libera di collegarsi al Wi-Fi.
+	// Guardia Wi-Fi iniziale (primi 20s di boot)
 	val_ch11 = CHANNEL_Get(11);
 	if (val_ch11 == 0) return false;
 	soglia_rssi = (val_ch11 > 0) ? -val_ch11 : val_ch11;
 
-	// Lettura durata impulso da Canale 17 (configurabile)
+	// Lettura durata impulso e cooldown da autoexec
 	val_ch17 = CHANNEL_Get(17);
 	if (val_ch17 > 0) pulse_duration = val_ch17 * 25;
 
-	// Lettura cooldown da Canale 18 (configurabile)
 	val_ch18 = CHANNEL_Get(18);
 	if (val_ch18 > 0) cooldown_duration = val_ch18 * 25;
 
-	// Gestione Timer in background
 	if (cooldown_timer > 0) {
 		cooldown_timer--;
 	}
@@ -72,10 +69,18 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	}
 
 	if (cooldown_timer > 0) {
-		return false; // Durante il cooldown non fa nulla
+		return false;
 	}
 
 	if (data != NULL) {
+		// Lampeggio stile "scheda di rete" attivo su ogni pacchetto captato nell'etere
+		blink_div++;
+		if (blink_div >= 6) { // Regola questo divisore se vuoi che lampeggi più fitto (es. 4) o più largo (es. 10)
+			blink_div = 0;
+			led_state = !led_state;
+			CHANNEL_Set(10, led_state, 2); // Flag 2 = Silenzioso (zero log MQTT)
+		}
+
 		if (mac != NULL) {
 			current_mac = (mac[3] << 16) | (mac[4] << 8) | mac[5];
 			if ((CHANNEL_Get(12) != 0 && current_mac == CHANNEL_Get(12)) ||
@@ -96,21 +101,13 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		}
 
 		if (found == 1 && rssi > soglia_rssi) {
-			// Dispositivo riconosciuto: attiva l'impulso relè a pulsante
+			// Dispositivo riconosciuto: eccita il relè a impulsi
 			is_pulsing = 1;
 			pulse_timer = pulse_duration;
 			cooldown_timer = cooldown_duration + pulse_duration;
 
-			CHANNEL_Set(0, 1, 0);  // Eccita il relè
-			CHANNEL_Set(10, 1, 0); // Accende il LED fisso
-		} else {
-			// Standby: Lampeggio silenzioso del LED (usando flag 2 per non intasare MQTT)
-			blink_div++;
-			if (blink_div >= 15) {
-				blink_div = 0;
-				led_state = !led_state;
-				CHANNEL_Set(10, led_state, 2); // Flag 2 = silenzioso
-			}
+			CHANNEL_Set(0, 1, 0);  // Relè ON
+			CHANNEL_Set(10, 1, 0); // LED Fisso
 		}
 	}
 	return false;
