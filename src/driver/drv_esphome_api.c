@@ -27,28 +27,32 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 {
 	uint8_t my_uuid[16] = {0xA1,0xB2,0xC3,0xD4,0xE5,0xF6,0x78,0x90,0x12,0x34,0x56,0x78,0x90,0xAB,0xCD,0xEF};
 	
+	static int boot_delay_counter = 0;
 	static int is_pulsing = 0;
 	static int pulse_timer = 0;
 	static int cooldown_timer = 0;
 	static int led_state = 0;
 	static int blink_div = 0;
+	static int log_counter = 0; // Per evitare lo spam infinito nel log
 
 	int found = 0;
 	int i, val_ch11, val_ch17, val_ch18, current_mac;
 	int soglia_rssi = -85;
-	int pulse_duration = 250;    // ~10 secondi reali
-	int cooldown_duration = 1500; // ~60 secondi di cooldown
+	int pulse_duration = 250;    
+	int cooldown_duration = 1500; 
 
 	(void)client_sock;
 	(void)addr_type;
 
-	// GUARDIA WI-FI ASSOLUTA ALL'INIZIO:
-	// Se il Canale 11 è a 0 (durante i 20s di boot), esce SUBITO bloccando qualsiasi traffico ed elaborazione BLE.
+	if (boot_delay_counter < 200) {
+		boot_delay_counter++;
+		return false;
+	}
+
 	val_ch11 = CHANNEL_Get(11);
 	if (val_ch11 == 0) return false;
 	soglia_rssi = (val_ch11 > 0) ? -val_ch11 : val_ch11;
 
-	// Lettura durata impulso e cooldown da autoexec
 	val_ch17 = CHANNEL_Get(17);
 	if (val_ch17 > 0) pulse_duration = val_ch17 * 25;
 
@@ -63,8 +67,8 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		pulse_timer--;
 		if (pulse_timer <= 0) {
 			is_pulsing = 0;
-			CHANNEL_Set(0, 0, 0);   // Spegne il relè
-			CHANNEL_Set(10, 0, 0);  // Spegne il LED
+			CHANNEL_Set(0, 0, 0);   
+			CHANNEL_Set(10, 0, 0);  
 		}
 		return false;
 	}
@@ -73,21 +77,33 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		return false;
 	}
 
+	if (mac != NULL && rssi > -80) {
+		// Stampa nel log web di OpenBeken il MAC letto quando il segnale è forte (limitato ogni ~50 pacchetti per non intasare)
+		log_counter++;
+		if (log_counter >= 50) {
+			log_counter = 0;
+			ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE Scan: MAC %02X:%02X:%02X:%02X:%02X:%02X (RSSI: %d)", 
+				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], rssi);
+		}
+	}
+
 	if (data != NULL) {
-		// Lampeggio stile "scheda di rete" attivo solo a Wi-Fi agganciato e protetto
 		blink_div++;
 		if (blink_div >= 6) {
 			blink_div = 0;
 			led_state = !led_state;
-			CHANNEL_Set(10, led_state, 2); // Flag 2 = Silenzioso
+			CHANNEL_Set(10, led_state, 2); 
 		}
 
 		if (mac != NULL) {
-			current_mac = (mac[3] << 16) | (mac[4] << 8) | mac[5];
-			if ((CHANNEL_Get(12) != 0 && current_mac == CHANNEL_Get(12)) ||
-				(CHANNEL_Get(13) != 0 && current_mac == CHANNEL_Get(13)) ||
-				(CHANNEL_Get(14) != 0 && current_mac == CHANNEL_Get(14)) ||
-				(CHANNEL_Get(15) != 0 && current_mac == CHANNEL_Get(15))) {
+			// Proviamo a calcolare il MAC sia dritto che invertito per massima compatibilità
+			int mac_dritto = (mac[3] << 16) | (mac[4] << 8) | mac[5];
+			int mac_invertito = (mac[2] << 16) | (mac[1] << 8) | mac[0];
+
+			if ((CHANNEL_Get(12) != 0 && (mac_dritto == CHANNEL_Get(12) || mac_invertito == CHANNEL_Get(12))) ||
+				(CHANNEL_Get(13) != 0 && (mac_dritto == CHANNEL_Get(13) || mac_invertito == CHANNEL_Get(13))) ||
+				(CHANNEL_Get(14) != 0 && (mac_dritto == CHANNEL_Get(14) || mac_invertito == CHANNEL_Get(14))) ||
+				(CHANNEL_Get(15) != 0 && (mac_dritto == CHANNEL_Get(15) || mac_invertito == CHANNEL_Get(15)))) {
 				found = 1;
 			}
 		}
@@ -102,13 +118,12 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		}
 
 		if (found == 1 && rssi > soglia_rssi) {
-			// Dispositivo riconosciuto: eccita il relè a impulsi
 			is_pulsing = 1;
 			pulse_timer = pulse_duration;
 			cooldown_timer = cooldown_duration + pulse_duration;
 
-			CHANNEL_Set(0, 1, 0);  // Relè ON
-			CHANNEL_Set(10, 1, 0); // LED Fisso
+			CHANNEL_Set(0, 1, 0);  
+			CHANNEL_Set(10, 1, 0); 
 		}
 	}
 	return false;
