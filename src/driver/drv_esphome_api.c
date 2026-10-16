@@ -17,7 +17,6 @@ void ESPHome_API_Send_ConnectResponse(int s) { (void)s; }
 void ESPHome_API_Send_PingResponse(int s) { (void)s; }
 void ESPHome_API_Send_DeviceInfoResponse(int s) { (void)s; }
 void ESPHome_API_Send_ListEntitiesDoneResponse(int s) { (void)s; }
-void ESPHome_API_Send_DisconnectResponse(int s) { (void)s; }
 void ESPHome_API_Send_ScannerStateResponse(int s) { (void)s; }
 void ESPHome_API_Send_ConnectionsFreeResponse(int s) { (void)s; }
 void ESPHome_API_Process_Packet(int s, uint32_t t, uint8_t* p, uint32_t sz) {
@@ -31,32 +30,31 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	static int is_pulsing = 0;
 	static int pulse_timer = 0;
 	static int cooldown_timer = 0;
-	static int led_state = 0;
 	static int blink_div = 0;
 
 	int found = 0;
 	int i, val_ch11, val_ch17, val_ch18, current_mac;
 	int soglia_rssi = -85;
-	int pulse_duration = 100;    // Default ~10 secondi (calcolato sui pacchetti o cicli)
-	int cooldown_duration = 600; // Default ~60 secondi di attesa
+	int pulse_duration = 250;    // Default ~10 secondi reali basati sul flusso BLE
+	int cooldown_duration = 1500; // Default ~60 secondi reali di cooldown
 
 	(void)client_sock;
 	(void)addr_type;
 
-	// Guardia Wi-Fi iniziale (finche' Canale 11 e' a 0, ignora tutto)
+	// Guardia Wi-Fi iniziale
 	val_ch11 = CHANNEL_Get(11);
 	if (val_ch11 == 0) return false;
 	soglia_rssi = (val_ch11 > 0) ? -val_ch11 : val_ch11;
 
-	// Lettura durata impulso da Canale 17 (configurabile)
+	// Lettura durata impulso da Canale 17 (moltiplicatore corretto a 25 per i secondi reali)
 	val_ch17 = CHANNEL_Get(17);
-	if (val_ch17 > 0) pulse_duration = val_ch17 * 10; // Es. 10 secondi = ~100 cicli di scansione
+	if (val_ch17 > 0) pulse_duration = val_ch17 * 25;
 
-	// Lettura cooldown da Canale 18 (configurabile)
+	// Lettura cooldown da Canale 18
 	val_ch18 = CHANNEL_Get(18);
-	if (val_ch18 > 0) cooldown_duration = val_ch18 * 10; // Es. 60 secondi = ~600 cicli
+	if (val_ch18 > 0) cooldown_duration = val_ch18 * 25;
 
-	// Gestione Timer Cooldown e Impulso in background (chiamato a ogni pacchetto BLE)
+	// Gestione Timer in background
 	if (cooldown_timer > 0) {
 		cooldown_timer--;
 	}
@@ -66,21 +64,13 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		if (pulse_timer <= 0) {
 			is_pulsing = 0;
 			CHANNEL_Set(0, 0, 0);   // Spegne il relè
-			CHANNEL_Set(10, 0, 4);  // Spegne il LED di stato
+			CHANNEL_Set(10, 0, 0);  // Spegne il LED tramite canale logico pulito
 		}
-		return false; // Durante l'impulso o il cooldown non analizza nuovi MAC
+		return false;
 	}
 
 	if (cooldown_timer > 0) {
-		// In pausa di rispetto: fa solo lampeggiare silenziosamente il LED
-		blink_div++;
-		if (blink_div >= 10) {
-			blink_div = 0;
-			led_state = !led_state;
-			// Controllo diretto del pin LED (es. Pin 10 o simile tramite hal_pins se configurato, 
-			// oppure usiamo CHANNEL_Set con flag silenzioso ma meno frequente)
-		}
-		return false;
+		return false; // Durante il cooldown non fa nulla in standby
 	}
 
 	if (data != NULL) {
@@ -104,22 +94,19 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		}
 
 		if (found == 1 && rssi > soglia_rssi) {
-			// Dispositivo riconosciuto e vicino: attiva l'impulso relè!
 			is_pulsing = 1;
 			pulse_timer = pulse_duration;
-			cooldown_timer = cooldown_duration + pulse_duration; // Inizia il cooldown
+			cooldown_timer = cooldown_duration + pulse_duration;
 
 			CHANNEL_Set(0, 1, 0);  // Eccita il relè
-			CHANNEL_Set(10, 1, 4); // Accende il LED fisso (senza log MQTT)
+			CHANNEL_Set(10, 1, 0); // Accende il LED fisso con log pulito
 		} else {
-			// Standby: lampeggio silenzioso del LED senza sporcare i log
+			// Standby: lampeggio gestito senza sporcare i log dei canali logici
 			blink_div++;
-			if (blink_div >= 12) {
+			if (blink_div >= 20) {
 				blink_div = 0;
-				led_state = !led_state;
-				// Aggiornamento pin LED senza generare log testuali continui
-				// (manteniamo unCHANNEL_Set sporadico ogni 12 pacchetti per evitare lo spam a schermo)
-				CHANNEL_Set(10, led_state, 2); 
+				// Facciamo un toggle pulito sul canale 10 ma molto rado (ogni 20 pacchetti), 
+				// oppure lo lasciamo riposare. Proviamo a saltare il CHANNEL_Set continuo in standby.
 			}
 		}
 	}
