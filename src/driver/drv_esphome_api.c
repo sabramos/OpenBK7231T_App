@@ -87,14 +87,6 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 			if ((CHANNEL_Get(12) != 0 && current_mac == CHANNEL_Get(12)) ||
 				(CHANNEL_Get(13) != 0 && current_mac == CHANNEL_Get(13)) ||
 				(CHANNEL_Get(14) != 0 && current_mac == CHANNEL_Get(14)) ||
-				(CHANNEL_Get(15) != 0 && current_mac == CHANNEL_Grade(15) /* safety */) // manteniamo la logica originaria pulita sotto
-			) {
-				// handled below
-			}
-			
-			if ((CHANNEL_Get(12) != 0 && current_mac == CHANNEL_Get(12)) ||
-				(CHANNEL_Get(13) != 0 && current_mac == CHANNEL_Get(13)) ||
-				(CHANNEL_Get(14) != 0 && current_mac == CHANNEL_Get(14)) ||
 				(CHANNEL_Get(15) != 0 && current_mac == CHANNEL_Get(15))) {
 				found = 1;
 			}
