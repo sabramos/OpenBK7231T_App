@@ -3,20 +3,6 @@
 #include "drv_esphome_api.h"
 #include "../hal/hal_wifi.h"
 #include <lwip/sockets.h>
-#include "../new_cfg.h"Ecco perché si comporta esattamente così:
-
-1. **Perché il LED non lampeggia più in standby:** Nella modifica precedente avevamo commentato la riga `CHANNEL_Set(10, ...)` per evitare che intasasse il registro MQTT, ma senza dare un comando alternativo al pin fisico. Per far lampeggiare il LED **senza svegliare MQTT e senza intasare i log**, basta usare il flag interno `CHANNEL_SET_FLAG_SILENT` (valore `4` in OpenBeken): `CHANNEL_Set(10, led_state, 4)`. In questo modo il LED lampeggia fisicamente ma il sistema non genera alcun log né traffico di rete.
-2. **Perché il Bluetooth funziona già all'avvio ma il Wi-Fi muore:** Nelle impostazioni della pagina web (**Config -> Configure General/Flags**), hai probabilmente attivato il flag di avvio automatico del Bluetooth Proxy. Questo fa sì che il chip LN882H accenda lo scanner Bluetooth **nel millisecondo zero** (ancora prima di leggere l'`autoexec.bat`), rubando tutta l'antenna a 2.4 GHz mentre il Wi-Fi sta cercando di negoziare l'IP con il router.
-
-### 1. Il codice definitivo con lampeggio silenzioso (`flag 4`)
-Sostituisci `drv_esphome_api.c` con questa versione, che riattiva il lampeggio sul Canale 10 usando il flag silenzioso `4` (zero impatto su CPU e zero log MQTT):
-
-```c
-#include "../new_common.h"
-#include "../logging/logging.h"
-#include "drv_esphome_api.h"
-#include "../hal/hal_wifi.h"
-#include <lwip/sockets.h>
 #include "../new_cfg.h"
 #include "../hal/hal_bt_proxy.h"
 
@@ -86,7 +72,7 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 			}
 			if (led_state != 1) {
 				led_state = 1;
-				CHANNEL_Set(10, 1, 4); // Flag 4 = Silenzioso (niente log/MQTT)
+				CHANNEL_Set(10, 1, 4);
 			}
 		} else {
 			if (is_present == 1) {
@@ -100,10 +86,10 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 				}
 			} else {
 				blink_div++;
-				if (blink_div >= 4) { // Lampeggio visibile ogni 4 pacchetti
+				if (blink_div >= 4) {
 					blink_div = 0;
 					led_state = !led_state;
-					CHANNEL_Set(10, led_state, 4); // Flag 4 = Cambia il LED senza intasare log e MQTT
+					CHANNEL_Set(10, led_state, 4);
 				}
 			}
 		}
