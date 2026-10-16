@@ -42,7 +42,8 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	(void)client_sock;
 	(void)addr_type;
 
-	// Guardia Wi-Fi iniziale (primi 20s di boot)
+	// GUARDIA WI-FI ASSOLUTA ALL'INIZIO:
+	// Se il Canale 11 è a 0 (durante i 20s di boot), esce SUBITO bloccando qualsiasi traffico ed elaborazione BLE.
 	val_ch11 = CHANNEL_Get(11);
 	if (val_ch11 == 0) return false;
 	soglia_rssi = (val_ch11 > 0) ? -val_ch11 : val_ch11;
@@ -73,16 +74,24 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	}
 
 	if (data != NULL) {
-		// Lampeggio stile "scheda di rete" attivo su ogni pacchetto captato nell'etere
+		// Lampeggio stile "scheda di rete" attivo solo a Wi-Fi agganciato e protetto
 		blink_div++;
-		if (blink_div >= 6) { // Regola questo divisore se vuoi che lampeggi più fitto (es. 4) o più largo (es. 10)
+		if (blink_div >= 6) {
 			blink_div = 0;
 			led_state = !led_state;
-			CHANNEL_Set(10, led_state, 2); // Flag 2 = Silenzioso (zero log MQTT)
+			CHANNEL_Set(10, led_state, 2); // Flag 2 = Silenzioso
 		}
 
 		if (mac != NULL) {
 			current_mac = (mac[3] << 16) | (mac[4] << 8) | mac[5];
+			if ((CHANNEL_Get(12) != 0 && current_mac == CHANNEL_Get(12)) ||
+				(CHANNEL_Get(13) != 0 && current_mac == CHANNEL_Get(13)) ||
+				(CHANNEL_Get(14) != 0 && current_mac == CHANNEL_Get(14)) ||
+				(CHANNEL_Get(15) != 0 && current_mac == CHANNEL_Grade(15) /* safety */) // manteniamo la logica originaria pulita sotto
+			) {
+				// handled below
+			}
+			
 			if ((CHANNEL_Get(12) != 0 && current_mac == CHANNEL_Get(12)) ||
 				(CHANNEL_Get(13) != 0 && current_mac == CHANNEL_Get(13)) ||
 				(CHANNEL_Get(14) != 0 && current_mac == CHANNEL_Get(14)) ||
