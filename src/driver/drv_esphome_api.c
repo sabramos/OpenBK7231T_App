@@ -5,6 +5,7 @@
 #include <lwip/sockets.h>
 #include "../new_cfg.h"
 #include "../hal/hal_bt_proxy.h"
+#include "../hal/hal_pins.h"
 
 #if ENABLE_DRIVER_ESPHOME_API
 
@@ -31,8 +32,6 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	static int is_pulsing = 0;
 	static int pulse_timer = 0;
 	static int cooldown_timer = 0;
-	static int led_state = 0;
-	static int blink_div = 0;
 	static int debug_log_div = 0;
 
 	int found = 0;
@@ -70,7 +69,7 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		if (pulse_timer <= 0) {
 			is_pulsing = 0;
 			CHANNEL_Set(0, 0, 0);   // Spegne il relè
-			CHANNEL_Set(10, 0, 0);  // Spegne il LED
+			CHANNEL_Set(10, 0, 4);  // Spegne il LED (senza log)
 		}
 		return false;
 	}
@@ -79,25 +78,16 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		return false;
 	}
 
-	// Lampeggio LED in standby (stile scheda di rete)
-	blink_div++;
-	if (blink_div >= 6) {
-		blink_div = 0;
-		led_state = !led_state;
-		CHANNEL_Set(10, led_state, 2); // Flag 2 = Silenzioso
-	}
-
-	// 1. Verifica riscontro MAC Address
+	// 1. Verifica riscontro MAC Address con indicazione RSSI nel log
 	if (mac != NULL) {
 		mac_dritto = (mac[3] << 16) | (mac[4] << 8) | mac[5];
 		mac_invertito = (mac[2] << 16) | (mac[1] << 8) | mac[0];
 
-		// Log di debug ogni tot pacchetti per vedere il valore calcolato in decimale
 		debug_log_div++;
-		if (debug_log_div >= 30) {
+		if (debug_log_div >= 25) {
 			debug_log_div = 0;
-			ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE Check: MAC %02X:%02X:%02X:%02X:%02X:%02X | Dritto: %d | Invertito: %d", 
-				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mac_dritto, mac_invertito);
+			ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE Check: MAC %02X:%02X:%02X:%02X:%02X:%02X | RSSI: %d dBm | Inv: %d", 
+				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], rssi, mac_invertito);
 		}
 
 		if ((CHANNEL_Get(12) != 0 && (mac_dritto == CHANNEL_Get(12) || mac_invertito == CHANNEL_Get(12))) ||
@@ -108,7 +98,7 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		}
 	}
 
-	// 2. Verifica riscontro Advertiser UUID (se il MAC non ha dato match)
+	// 2. Verifica riscontro Advertiser UUID
 	if (found == 0 && data != NULL && data_len >= 16) {
 		for (i = 0; i <= data_len - 16; i++) {
 			if (memcmp(&data[i], my_uuid, 16) == 0) {
@@ -125,8 +115,8 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		cooldown_timer = cooldown_duration + pulse_duration;
 
 		CHANNEL_Set(0, 1, 0);  // Relè ON (impulso)
-		CHANNEL_Set(10, 1, 0); // LED Fisso
-		ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE MATCH SUCCESS! Relè attivato per RSSI %d", rssi);
+		CHANNEL_Set(10, 1, 4); // LED Fisso (flag 4 = silenzioso)
+		ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE MATCH SUCCESS! Relè attivato (RSSI: %d dBm)", rssi);
 	}
 
 	return false;
