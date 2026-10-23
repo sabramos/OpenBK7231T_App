@@ -30,7 +30,6 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	// L'UUID del tuo iBeacon per l'apertura (16 byte)
 	uint8_t my_uuid[16] = {0xA1,0xB2,0xC3,0xD4,0xE5,0xF6,0x78,0x90,0x12,0x34,0x56,0x78,0x90,0xAB,0xCD,0xEF};
 	
-	// Macchine a stati per la temporizzazione reale
 	static int is_pulsing = 0;
 	static int is_cooldown = 0;
 	static unsigned int pulse_start_time = 0;
@@ -45,51 +44,62 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	(void)client_sock;
 	(void)addr_type;
 
-	// Guardia Wi-Fi iniziale: ignora tutto per i primi 15 secondi di boot
+	// Guardia Wi-Fi iniziale (15s di boot)
 	if (g_timeMs < 15000) {
+		CHANNEL_Set(10, 0, 4); // LED Spento all'avvio
 		return false;
 	}
 
 	// Acquisizione impostazioni dalla Web UI
 	int val_ch11 = CHANNEL_Get(11);
-	if (val_ch11 == 0) return false;
+	if (val_ch11 == 0) {
+		CHANNEL_Set(10, 0, 4); // Se il sistema è disattivato (Canale 11 a 0), spegni il LED
+		return false;
+	}
 	int soglia_rssi = (val_ch11 > 0) ? -val_ch11 : val_ch11;
 
-	// I Canali 17 e 18 ora sono i SECONDI ESATTI di durata
 	int val_ch17 = CHANNEL_Get(17);
-	unsigned int pulse_duration_ms = (val_ch17 > 0) ? (val_ch17 * 1000) : 10000; // Default 10 sec
+	unsigned int pulse_duration_ms = (val_ch17 > 0) ? (val_ch17 * 1000) : 10000; 
 
 	int val_ch18 = CHANNEL_Get(18);
-	unsigned int cooldown_duration_ms = (val_ch18 > 0) ? (val_ch18 * 1000) : 60000; // Default 60 sec
+	unsigned int cooldown_duration_ms = (val_ch18 > 0) ? (val_ch18 * 1000) : 60000;
 
 	// =========================================================================
-	// MACCHINA A STATI: GESTIONE IMPULSO IN CORSO (RELE' ATTIVO)
+	// MACCHINA A STATI: GESTIONE IMPULSO (RELE' ATTIVO)
 	// =========================================================================
 	if (is_pulsing) {
-		// Controlla se il tempo di impulso è terminato
-		if ((g_timeMs - pulse_start_time) >= pulse_duration_ms) {
+		unsigned int elapsed = g_timeMs - pulse_start_time;
+		
+		// Controllo fine impulso
+		if (elapsed >= pulse_duration_ms) {
 			is_pulsing = 0;
-			is_cooldown = 1; // Avvia il cooldown
+			is_cooldown = 1; 
 			cooldown_start_time = g_timeMs;
 			matched_channel = 0;
 			
-			CHANNEL_Set(0, 0, 0);  // Spegne il relè (Fine apertura)
-			CHANNEL_Set(10, 0, 4); // Spegne il LED
+			CHANNEL_Set(0, 0, 0);  // Spegne il relè
 		} 
 		else {
-			// Gestione temporizzata dei micro-lampeggi del LED in base al MAC/UUID riconosciuto
-			unsigned int elapsed = g_timeMs - pulse_start_time;
-			int target_blinks = (matched_channel >= 12 && matched_channel <= 15) ? (matched_channel - 10) : 1;
-			
-			// 150 millisecondi per ogni stato (acceso/spento)
-			unsigned int current_toggle = elapsed / 150; 
-			if (current_toggle < (unsigned int)(target_blinks * 2)) {
-				CHANNEL_Set(10, (current_toggle % 2 == 0) ? 1 : 0, 4);
+			// Gestione visiva LED durante l'impulso
+			if (elapsed < 2000) {
+				// Primi 2 secondi: LED fisso per confermare l'attivazione immediata
+				CHANNEL_Set(10, 1, 4);
 			} else {
-				CHANNEL_Set(10, 1, 4); // Lascia il LED acceso fisso per il resto del tempo
+				// Dopo 2 secondi: inizia la sequenza di identificazione
+				unsigned int blink_elapsed = elapsed - 2000;
+				int target_blinks = (matched_channel >= 12 && matched_channel <= 15) ? (matched_channel - 10) : 1;
+				
+				unsigned int current_toggle = blink_elapsed / 150; 
+				if (current_toggle < (unsigned int)(target_blinks * 2)) {
+					// Inizia con lo zero (spento) per far notare lo stacco dal fisso
+					CHANNEL_Set(10, (current_toggle % 2 == 0) ? 0 : 1, 4);
+				} else {
+					// Finita l'identificazione, torna fisso per il tempo rimanente
+					CHANNEL_Set(10, 1, 4); 
+				}
 			}
 		}
-		return false; // Blocca la lettura di nuovi MAC mentre il cancello è in manovra
+		return false; 
 	}
 
 	// =========================================================================
@@ -97,23 +107,27 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	// =========================================================================
 	if (is_cooldown) {
 		if ((g_timeMs - cooldown_start_time) >= cooldown_duration_ms) {
-			is_cooldown = 0; // Cooldown terminato, sistema di nuovo in ascolto
+			is_cooldown = 0; // Cooldown terminato, torna operativo
 		} else {
-			return false; // Sistema in attesa, ignora letture Bluetooth
+			// LED: Lampeggio molto lento (1 sec acceso, 1 sec spento)
+			CHANNEL_Set(10, ((g_timeMs / 1000) % 2 == 0) ? 1 : 0, 4);
+			return false; 
 		}
 	}
 
 	// =========================================================================
+	// MACCHINA A STATI: SCANSIONE IN CORSO (PRONTO)
+	// =========================================================================
+	// LED: Lampeggio veloce (250ms acceso, 250ms spento)
+	CHANNEL_Set(10, ((g_timeMs / 250) % 2 == 0) ? 1 : 0, 4);
+
+	// =========================================================================
 	// LETTURA E MATCHING BLUETOOTH
 	// =========================================================================
-	
-	// 1. Verifica riscontro MAC Address
 	if (mac != NULL) {
-		// Hack per salvare mezzo MAC in un canale OpenBeken
 		mac_dritto = (mac[3] << 16) | (mac[4] << 8) | mac[5];
 		mac_invertito = (mac[2] << 16) | (mac[1] << 8) | mac[0];
 
-		// Logga massimo una volta al secondo per non sovraccaricare il chip
 		if ((g_timeMs - last_debug_time) >= 1000) {
 			last_debug_time = g_timeMs;
 			ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE Check: MAC %02X:%02X:%02X:%02X:%02X:%02X | RSSI: %d dBm | Inv: %d", 
@@ -131,7 +145,6 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		}
 	}
 
-	// 2. Verifica riscontro Advertiser UUID (iBeacon)
 	if (found == 0 && data != NULL && data_len >= 16) {
 		for (i = 0; i <= data_len - 16; i++) {
 			if (memcmp(&data[i], my_uuid, 16) == 0) {
@@ -142,13 +155,12 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		}
 	}
 
-	// 3. Esecuzione Apertura
 	if (found == 1 && rssi > soglia_rssi) {
 		is_pulsing = 1;
 		pulse_start_time = g_timeMs;
 
-		CHANNEL_Set(0, 1, 0);  // Relè ON (Inizia impulso)
-		CHANNEL_Set(10, 1, 4); // LED ON
+		CHANNEL_Set(0, 1, 0);  
+		CHANNEL_Set(10, 1, 4); // Forza subito il LED acceso al comando
 		
 		if (matched_channel > 0) {
 			ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE MATCH SUCCESS! Canale %d attivato (RSSI: %d dBm)", matched_channel, rssi);
