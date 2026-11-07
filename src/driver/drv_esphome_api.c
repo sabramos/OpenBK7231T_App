@@ -11,7 +11,7 @@
 
 extern void CHANNEL_Set(int ch, int val, int iFlags);
 extern int CHANNEL_Get(int ch);
-extern unsigned int g_timeMs; // Variabile di sistema OS per il tempo in millisecondi
+extern unsigned int g_timeMs; 
 
 void ESPHome_API_Send_HelloResponse(int s) { (void)s; }
 void ESPHome_API_Send_ConnectResponse(int s) { (void)s; }
@@ -27,9 +27,14 @@ void ESPHome_API_Process_Packet(int s, uint32_t t, uint8_t* p, uint32_t sz) {
 
 bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, uint8_t addr_type, const uint8_t* data, int data_len)
 {
-	// L'UUID del tuo iBeacon per l'apertura (16 byte)
-	uint8_t my_uuid[16] = {0xA1,0xB2,0xC3,0xD4,0xE5,0xF6,0x78,0x90,0x12,0x34,0x56,0x78,0x90,0xAB,0xCD,0xEF};
-	
+	// =========================================================================
+	// DEFINIZIONE DEI 3 UUID iBEACON (Modifica qui i valori esadecimali)
+	// =========================================================================
+	uint8_t uuid_1[16] = {0xA1,0xB2,0xC3,0xD4,0xE5,0xF6,0x78,0x90,0x12,0x34,0x56,0x78,0x90,0xAB,0xCD,0xEF};
+	uint8_t uuid_2[16] = {0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0xAA,0xBB,0xCC,0xDD,0xEE,0xFF,0x00};
+	uint8_t uuid_3[16] = {0x00,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0xAA,0xBB,0xCC,0xDD,0xEE,0xFF};
+	// =========================================================================
+
 	static int is_pulsing = 0;
 	static int is_cooldown = 0;
 	static unsigned int pulse_start_time = 0;
@@ -53,7 +58,7 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	// Acquisizione impostazioni dalla Web UI
 	int val_ch11 = CHANNEL_Get(11);
 	if (val_ch11 == 0) {
-		CHANNEL_Set(10, 0, 4); // Se il sistema è disattivato (Canale 11 a 0), spegni il LED
+		CHANNEL_Set(10, 0, 4); // Se disattivato, spegni LED
 		return false;
 	}
 	int soglia_rssi = (val_ch11 > 0) ? -val_ch11 : val_ch11;
@@ -63,6 +68,11 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 
 	int val_ch18 = CHANNEL_Get(18);
 	unsigned int cooldown_duration_ms = (val_ch18 > 0) ? (val_ch18 * 1000) : 60000;
+
+	// Acquisizione stato abilitazione UUID dai canali 19, 20, 21
+	int en_uuid1 = CHANNEL_Get(19);
+	int en_uuid2 = CHANNEL_Get(20);
+	int en_uuid3 = CHANNEL_Get(21);
 
 	// =========================================================================
 	// MACCHINA A STATI: GESTIONE IMPULSO (RELE' ATTIVO)
@@ -75,26 +85,29 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 			is_pulsing = 0;
 			is_cooldown = 1; 
 			cooldown_start_time = g_timeMs;
-			matched_channel = 0;
 			
 			CHANNEL_Set(0, 0, 0);  // Spegne il relè
 		} 
 		else {
-			// Gestione visiva LED durante l'impulso
+			// Gestione visiva LED
 			if (elapsed < 2000) {
-				// Primi 2 secondi: LED fisso per confermare l'attivazione immediata
+				// Primi 2 secondi: LED fisso
 				CHANNEL_Set(10, 1, 4);
 			} else {
-				// Dopo 2 secondi: inizia la sequenza di identificazione
+				// Lampeggi diagnostici in base al canale (MAC o UUID)
 				unsigned int blink_elapsed = elapsed - 2000;
-				int target_blinks = (matched_channel >= 12 && matched_channel <= 15) ? (matched_channel - 10) : 1;
+				int target_blinks = 1;
+				
+				if (matched_channel >= 12 && matched_channel <= 15) {
+					target_blinks = matched_channel - 10; // Da 2 a 5 lampeggi per MAC
+				} else if (matched_channel >= 19 && matched_channel <= 21) {
+					target_blinks = matched_channel - 13; // Da 6 a 8 lampeggi per UUID
+				}
 				
 				unsigned int current_toggle = blink_elapsed / 150; 
 				if (current_toggle < (unsigned int)(target_blinks * 2)) {
-					// Inizia con lo zero (spento) per far notare lo stacco dal fisso
 					CHANNEL_Set(10, (current_toggle % 2 == 0) ? 0 : 1, 4);
 				} else {
-					// Finita l'identificazione, torna fisso per il tempo rimanente
 					CHANNEL_Set(10, 1, 4); 
 				}
 			}
@@ -107,7 +120,7 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	// =========================================================================
 	if (is_cooldown) {
 		if ((g_timeMs - cooldown_start_time) >= cooldown_duration_ms) {
-			is_cooldown = 0; // Cooldown terminato, torna operativo
+			is_cooldown = 0;
 		} else {
 			// LED: Lampeggio molto lento (1 sec acceso, 1 sec spento)
 			CHANNEL_Set(10, ((g_timeMs / 1000) % 2 == 0) ? 1 : 0, 4);
@@ -118,7 +131,6 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	// =========================================================================
 	// MACCHINA A STATI: SCANSIONE IN CORSO (PRONTO)
 	// =========================================================================
-	// LED: Lampeggio veloce (250ms acceso, 250ms spento)
 	CHANNEL_Set(10, ((g_timeMs / 250) % 2 == 0) ? 1 : 0, 4);
 
 	// =========================================================================
@@ -145,27 +157,35 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		}
 	}
 
+	// Controllo payload per UUID iBeacon (solo se abilitati dai canali 19, 20, 21)
 	if (found == 0 && data != NULL && data_len >= 16) {
 		for (i = 0; i <= data_len - 16; i++) {
-			if (memcmp(&data[i], my_uuid, 16) == 0) {
-				found = 1;
-				matched_channel = 0;
-				break;
+			if (en_uuid1 > 0 && memcmp(&data[i], uuid_1, 16) == 0) {
+				found = 1; matched_channel = 19; break;
+			}
+			if (en_uuid2 > 0 && memcmp(&data[i], uuid_2, 16) == 0) {
+				found = 1; matched_channel = 20; break;
+			}
+			if (en_uuid3 > 0 && memcmp(&data[i], uuid_3, 16) == 0) {
+				found = 1; matched_channel = 21; break;
 			}
 		}
 	}
 
+	// =========================================================================
+	// ESECUZIONE ATTIVAZIONE RELÈ
+	// =========================================================================
 	if (found == 1 && rssi > soglia_rssi) {
 		is_pulsing = 1;
 		pulse_start_time = g_timeMs;
 
 		CHANNEL_Set(0, 1, 0);  
-		CHANNEL_Set(10, 1, 4); // Forza subito il LED acceso al comando
+		CHANNEL_Set(10, 1, 4); 
 		
-		if (matched_channel > 0) {
-			ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE MATCH SUCCESS! Canale %d attivato (RSSI: %d dBm)", matched_channel, rssi);
+		if (matched_channel >= 19 && matched_channel <= 21) {
+			ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE MATCH SUCCESS! UUID Canale %d attivato (RSSI: %d dBm)", matched_channel, rssi);
 		} else {
-			ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE MATCH SUCCESS! UUID Advertiser attivato (RSSI: %d dBm)", rssi);
+			ADDLOG_INFO(LOG_FEATURE_MAIN, "BLE MATCH SUCCESS! MAC Canale %d attivato (RSSI: %d dBm)", matched_channel, rssi);
 		}
 	}
 
