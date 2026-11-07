@@ -28,12 +28,11 @@ void ESPHome_API_Process_Packet(int s, uint32_t t, uint8_t* p, uint32_t sz) {
 bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, uint8_t addr_type, const uint8_t* data, int data_len)
 {
 	// =========================================================================
-	// DEFINIZIONE DEI 3 UUID iBEACON (Modifica qui i valori esadecimali)
+	// DEFINIZIONE DEI 3 UUID iBEACON
 	// =========================================================================
 	uint8_t uuid_1[16] = {0xA1,0xB2,0xC3,0xD4,0xE5,0xF6,0x78,0x90,0x12,0x34,0x56,0x78,0x90,0xAB,0xCD,0xEF};
 	uint8_t uuid_2[16] = {0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0xAA,0xBB,0xCC,0xDD,0xEE,0xFF,0x00};
 	uint8_t uuid_3[16] = {0x00,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0xAA,0xBB,0xCC,0xDD,0xEE,0xFF};
-	// =========================================================================
 
 	static int is_pulsing = 0;
 	static int is_cooldown = 0;
@@ -49,59 +48,46 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 	(void)client_sock;
 	(void)addr_type;
 
-	// Guardia Wi-Fi iniziale (15s di boot)
 	if (g_timeMs < 15000) {
-		CHANNEL_Set(10, 0, 4); // LED Spento all'avvio
+		CHANNEL_Set(10, 0, 4); 
 		return false;
 	}
 
-	// Acquisizione impostazioni dalla Web UI
 	int val_ch11 = CHANNEL_Get(11);
 	if (val_ch11 == 0) {
-		CHANNEL_Set(10, 0, 4); // Se disattivato, spegni LED
+		CHANNEL_Set(10, 0, 4); 
 		return false;
 	}
 	int soglia_rssi = (val_ch11 > 0) ? -val_ch11 : val_ch11;
 
 	int val_ch17 = CHANNEL_Get(17);
-	unsigned int pulse_duration_ms = (val_ch17 > 0) ? (val_ch17 * 1000) : 10000; 
+	unsigned int pulse_duration_ms = (val_ch17 > 0) ? (val_ch17 * 1000) : 5000; 
 
 	int val_ch18 = CHANNEL_Get(18);
 	unsigned int cooldown_duration_ms = (val_ch18 > 0) ? (val_ch18 * 1000) : 60000;
 
-	// Acquisizione stato abilitazione UUID dai canali 19, 20, 21
-	int en_uuid1 = CHANNEL_Get(19);
-	int en_uuid2 = CHANNEL_Get(20);
-	int en_uuid3 = CHANNEL_Get(21);
-
 	// =========================================================================
-	// MACCHINA A STATI: GESTIONE IMPULSO (RELE' ATTIVO)
+	// GESTIONE STATI
 	// =========================================================================
 	if (is_pulsing) {
 		unsigned int elapsed = g_timeMs - pulse_start_time;
-		
-		// Controllo fine impulso
 		if (elapsed >= pulse_duration_ms) {
 			is_pulsing = 0;
 			is_cooldown = 1; 
 			cooldown_start_time = g_timeMs;
-			
-			CHANNEL_Set(0, 0, 0);  // Spegne il relè
+			CHANNEL_Set(0, 0, 0);  
 		} 
 		else {
-			// Gestione visiva LED
 			if (elapsed < 2000) {
-				// Primi 2 secondi: LED fisso
 				CHANNEL_Set(10, 1, 4);
 			} else {
-				// Lampeggi diagnostici in base al canale (MAC o UUID)
 				unsigned int blink_elapsed = elapsed - 2000;
 				int target_blinks = 1;
 				
 				if (matched_channel >= 12 && matched_channel <= 15) {
-					target_blinks = matched_channel - 10; // Da 2 a 5 lampeggi per MAC
+					target_blinks = matched_channel - 10; 
 				} else if (matched_channel >= 19 && matched_channel <= 21) {
-					target_blinks = matched_channel - 13; // Da 6 a 8 lampeggi per UUID
+					target_blinks = matched_channel - 13; 
 				}
 				
 				unsigned int current_toggle = blink_elapsed / 150; 
@@ -115,26 +101,19 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		return false; 
 	}
 
-	// =========================================================================
-	// MACCHINA A STATI: GESTIONE COOLDOWN (ATTESA DI SICUREZZA)
-	// =========================================================================
 	if (is_cooldown) {
 		if ((g_timeMs - cooldown_start_time) >= cooldown_duration_ms) {
 			is_cooldown = 0;
 		} else {
-			// LED: Lampeggio molto lento (1 sec acceso, 1 sec spento)
 			CHANNEL_Set(10, ((g_timeMs / 1000) % 2 == 0) ? 1 : 0, 4);
 			return false; 
 		}
 	}
 
-	// =========================================================================
-	// MACCHINA A STATI: SCANSIONE IN CORSO (PRONTO)
-	// =========================================================================
 	CHANNEL_Set(10, ((g_timeMs / 250) % 2 == 0) ? 1 : 0, 4);
 
 	// =========================================================================
-	// LETTURA E MATCHING BLUETOOTH
+	// MATCHING
 	// =========================================================================
 	if (mac != NULL) {
 		mac_dritto = (mac[3] << 16) | (mac[4] << 8) | mac[5];
@@ -157,24 +136,28 @@ bool ESPHome_API_Hook_ScanResult(int client_sock, const uint8_t* mac, int rssi, 
 		}
 	}
 
-	// Controllo payload per UUID iBeacon (solo se abilitati dai canali 19, 20, 21)
+	// BLOCCO UUID BLINDATO
 	if (found == 0 && data != NULL && data_len >= 16) {
 		for (i = 0; i <= data_len - 16; i++) {
-			if (en_uuid1 > 0 && memcmp(&data[i], uuid_1, 16) == 0) {
-				found = 1; matched_channel = 19; break;
+			// Esegue la memcmp SOLO SE il canale corrispondente è rigorosamente maggiore di 0
+			if (CHANNEL_Get(19) > 0) {
+				if (memcmp(&data[i], uuid_1, 16) == 0) {
+					found = 1; matched_channel = 19; break;
+				}
 			}
-			if (en_uuid2 > 0 && memcmp(&data[i], uuid_2, 16) == 0) {
-				found = 1; matched_channel = 20; break;
+			if (CHANNEL_Get(20) > 0) {
+				if (memcmp(&data[i], uuid_2, 16) == 0) {
+					found = 1; matched_channel = 20; break;
+				}
 			}
-			if (en_uuid3 > 0 && memcmp(&data[i], uuid_3, 16) == 0) {
-				found = 1; matched_channel = 21; break;
+			if (CHANNEL_Get(21) > 0) {
+				if (memcmp(&data[i], uuid_3, 16) == 0) {
+					found = 1; matched_channel = 21; break;
+				}
 			}
 		}
 	}
 
-	// =========================================================================
-	// ESECUZIONE ATTIVAZIONE RELÈ
-	// =========================================================================
 	if (found == 1 && rssi > soglia_rssi) {
 		is_pulsing = 1;
 		pulse_start_time = g_timeMs;
